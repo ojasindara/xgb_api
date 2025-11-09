@@ -1,4 +1,4 @@
-# xgb_signal_prediction_firebase.py
+# xgb_signal_prediction_supabase.py
 
 import pandas as pd
 import numpy as np
@@ -6,50 +6,45 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 from xgboost import XGBRegressor
 import joblib
-import firebase_admin
-from firebase_admin import credentials, firestore
+from supabase import create_client, Client
 
 # ---------------- CONFIG ----------------
 MODEL_OUT = "xgb_signal_strength_model.pkl"
 TARGET = "download_mbps"  # Target variable
 RANDOM_STATE = 42
-FIREBASE_CRED_PATH = "C:\Users\Admin\AndroidStudioProjects\network_predicter\python_backend_prediction\firestore\databases\networkpredicter\networkpredictor-firebase-adminsdk-fbsvc-ab5e905e3b.json"  # <-- change this
-COLLECTION_NAME = "networkLogs"
-# ----------------------------------------
 
-# ---------------- Initialize Firebase ----------------
-cred = credentials.Certificate(FIREBASE_CRED_PATH)
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# ---------------- Supabase Config ----------------
+SUPABASE_URL = "https://lofhphqjdfairgjqhjvp.supabase.co"   # Replace with your Supabase project URL
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvZmhwaHFqZGZhaXJnanFoanZwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MDk5NTk0MSwiZXhwIjoyMDc2NTcxOTQxfQ.tLSf-lAxJEmQYPT5g0-JHLO_ndIL2UDBEdMzFNq23ag"                      # Replace with your Supabase service key
 
-# ---------------- Fetch Data from Firebase ----------------
-docs = db.collection(COLLECTION_NAME).stream()
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+TABLE_NAME = "speed_logs"
+
+# ---------------- Fetch Data from Supabase ----------------
+response = supabase.table(TABLE_NAME).select("*").execute()
+records_raw = response.data
+
+if not records_raw:
+    raise ValueError("No valid network logs found in Supabase.")
+
 records = []
-
-for doc in docs:
-    data = doc.to_dict()
+for data in records_raw:
     try:
         records.append({
-            "signal_dbm": int(data.get("signal_dbm", -1)),
+            "signal_dbm": int(data.get("signal_strength", -1)),
             "latitude": float(data.get("latitude", 0.0)),
             "longitude": float(data.get("longitude", 0.0)),
-            "download_kbps": float(data.get("download_kbps", 0.0)),
-            "upload_kbps": float(data.get("upload_kbps", 0.0)),
+            "download_mbps": float(data.get("download_speed", 0.0)),
+            "upload_mbps": float(data.get("upload_speed", 0.0)),
             "timestamp": pd.to_datetime(data.get("timestamp"))
         })
     except Exception as e:
-        print(f"Skipping doc {doc.id} due to error: {e}")
+        print(f"Skipping record due to error: {e}")
 
 df = pd.DataFrame(records)
-if df.empty:
-    raise ValueError("No valid network logs found in Firebase.")
 
 # ---------------- Data Cleaning ----------------
-df = df.dropna(subset=["signal_dbm", "latitude", "longitude", "download_kbps", "upload_kbps", "timestamp"])
-
-# Convert speeds to Mbps
-df["download_mbps"] = df["download_kbps"] / 1000
-df["upload_mbps"] = df["upload_kbps"] / 1000
+df = df.dropna(subset=["signal_dbm", "latitude", "longitude", "download_mbps", "upload_mbps", "timestamp"])
 
 # ---------------- Feature Engineering (Time) ----------------
 df["hour"] = df["timestamp"].dt.hour
@@ -99,11 +94,11 @@ print(f"💾 Model saved as '{MODEL_OUT}'")
 # ---------------- Example Prediction ----------------
 example = pd.DataFrame({
     "signal_dbm": [-80],
-    "latitude": [6.2546],    # Example latitude
-    "longitude": [5.2345],   # Example longitude
-    "hour_sin": [np.sin(2 * np.pi * 14 / 24)],  # 2 PM
+    "latitude": [6.2546],
+    "longitude": [5.2345],
+    "hour_sin": [np.sin(2 * np.pi * 14 / 24)],
     "hour_cos": [np.cos(2 * np.pi * 14 / 24)],
-    "weekday": [2]  # Wednesday
+    "weekday": [2]
 })
 pred_speed = model.predict(example)[0]
 print(f"🌐 Predicted Download Speed: {pred_speed:.2f} Mbps")
